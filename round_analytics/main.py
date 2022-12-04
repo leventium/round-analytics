@@ -1,8 +1,15 @@
 import os
+from functions import check_env
 from static_router import static_router
 from promo_router import promo_router
 from fastapi import FastAPI
 import uvicorn
+
+
+check_env(
+    "REDIS_CONNSTRING",
+    "ADMIN_SECRET"
+)
 
 
 app = FastAPI(

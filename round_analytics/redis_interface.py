@@ -1,37 +1,38 @@
+from html import escape
 import aioredis
 
 
 class RedisStorage:
     @classmethod
-    async def create(cls, connstring: str) -> RedisStorage:
+    async def create(cls, connstring: str):
         obj = cls()
         obj.redis = aioredis.from_url(connstring, decode_responses=True)
         await obj.redis.setnx("user_id_counter", 0)
         return obj
-    
+
     async def close(self):
         await self.redis.close()
-    
+
     async def get_inviters(self) -> list[str]:
         return await self.redis.lrange("inviters", 0, -1)
-    
+
     async def put_inviter(self, inviter: str) -> None:
-        inviter = inviter.lower()
+        inviter = escape(inviter.lower())
         if inviter not in (await self.get_inviters()):
             await self.redis.rpush("inviters", inviter.lower())
 
     async def check_inviter(self, inviter: str) -> bool:
-        inviter = inviter.lower()
+        inviter = escape(inviter.lower())
         return inviter in (await self.get_inviters())
-    
-    async def __increase(self, map: str, inviter: str) -> None:
-        inviter = inviter.lower()
-        count = await self.redis.hget(map, inviter)
+
+    async def __increase(self, role: str, inviter: str) -> None:
+        inviter = escape(inviter.lower())
+        count = await self.redis.hget(role, inviter)
         if count is None:
             count = 0
         count = int(count) + 1
-        await self.redis.hset(map, inviter, count)
-    
+        await self.redis.hset(role, inviter, count)
+
     async def increase_visits(self, inviter: str) -> None:
         await self.__increase("visits", inviter)
 
@@ -41,13 +42,15 @@ class RedisStorage:
     async def put_contact(self, inviter: str, name: str, contact: str) -> None:
         new_user_id = int(await self.redis.get("user_id_counter"))
         await self.redis.set("user_id_counter", new_user_id + 1)
-        await self.redis.hset("user_name", new_user_id, name)
-        await self.redis.hset("user_contact", new_user_id, contact)
-        await self.redis.hset("user_inviter", new_user_id, inviter.lower())
+        await self.redis.hset("user_name", new_user_id, escape(name))
+        await self.redis.hset("user_contact", new_user_id, escape(contact))
+        await self.redis.hset(
+            "user_inviter", new_user_id, escape(inviter.lower()))
 
     async def get_visit_stats(self) -> list[tuple]:
         """
-        Returns list of tuplse in format [(inviter, visiters_count, downloaders_count)].
+        Returns list of tuplse in format
+        [(inviter, visiters_count, downloaders_count)].
         Sorted by inviter.
         """
         result = []

@@ -1,21 +1,18 @@
 import os
 from urllib.parse import parse_qs
-import static
-import templates
+import responses
 from redis_interface import RedisStorage
-from functions import check_env
-from fastapi import APIRouter, Request, status, Response
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from jinja2 import Template
 
 
-check_env(
-    "REDIS_CONNSTRING",
-    "ADMIN_SECRET"
-)
 promo_router = APIRouter()
-promo_tmpl = Template(templates.PROMO)
-admin_tmpl = Template(templates.ADMIN)
+cur_dir = os.path.dirname(__file__)
+with open(f"{cur_dir}/templates/promo_admin.html", "r") as file:
+    admin_tmpl = Template(file.read())
+with open(f"{cur_dir}/templates/promo.html", "r") as file:
+    promo_tmpl = Template(file.read())
 
 
 @promo_router.on_event("startup")
@@ -33,15 +30,11 @@ async def stop():
 @promo_router.get("/promo-admin/{secret}")
 async def get_admin_panel(secret: str):
     if secret != os.environ["ADMIN_SECRET"]:
-        return Response(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": "not found"},
-            media_type="application/json"
-        )
+        return responses.ADMIN_NOT_FOUND
     inviters = await redis.get_inviters()
     inviter_stats = await redis.get_visit_stats()
     clients = await redis.get_contacts()
-    panel = await admin_tmpl.render_async(
+    panel = admin_tmpl.render(
         secret=secret,
         inviters=inviters,
         inviter_stats=inviter_stats,
@@ -53,17 +46,14 @@ async def get_admin_panel(secret: str):
 @promo_router.post("/promo-admin/{secret}")
 async def post_new_inviter(secret: str, req: Request):
     if secret != os.environ["ADMIN_SECRET"]:
-        return Response(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": "not found"},
-            media_type="application/json"
-        )
-    body = parse_qs((await req.body()).decode())
-    await redis.put_inviter(body["name"][0])
+        return responses.ADMIN_NOT_FOUND
+    inviter = parse_qs((await req.body()).decode()).get("name")
+    if inviter is not None:
+        await redis.put_inviter(inviter[0])
     inviters = await redis.get_inviters()
     inviter_stats = await redis.get_visit_stats()
     clients = await redis.get_contacts()
-    panel = await admin_tmpl.render_async(
+    panel = admin_tmpl.render(
         secret=secret,
         inviters=inviters,
         inviter_stats=inviter_stats,
@@ -73,38 +63,27 @@ async def post_new_inviter(secret: str, req: Request):
 
 
 @promo_router.get("/promo")
-async def get_promo_page(source: str | None = None):
-    if source is None:
-        return HTMLResponse(
-            content=static.ERR404,
-            status_code=status.HTTP_404_NOT_FOUND
-        )
-    if redis.check_inviter(source):
-        return HTMLResponse(
-            content=static.ERR400,
-            status_code=status.HTTP_400_BAD_REQUEST
-        )
+async def get_promo_page(source: str):
+    if source == "":
+        return responses.NOT_FOUND
+    if not await redis.check_inviter(source):
+        return responses.BAD_REQUEST
     await redis.increase_visits(source)
-    return await promo_tmpl.render_async(
-        callback_link=f"https://round-travel.site/promo?source={source}"
+    promo_site = promo_tmpl.render(
+        callback_link=f"/promo?source={source}"
     )
+    return HTMLResponse(content=promo_site)
 
 
 @promo_router.post("/promo")
 async def post_contacts(source: str, req: Request):
-    if redis.check_inviter(source):
-        return HTMLResponse(
-            content=static.ERR400,
-            status_code=status.HTTP_400_BAD_REQUEST
-        )
+    if source == "":
+        return responses.NOT_FOUND
+    if not await redis.check_inviter(source):
+        return responses.BAD_REQUEST
     body = parse_qs((await req.body()).decode())
     if "name" not in body or "contact" not in body:
-        return HTMLResponse(
-            content=static.ERR400,
-            status_code=status.HTTP_400_BAD_REQUEST
-        )
+        return responses.BAD_REQUEST
     await redis.increase_downloads(source)
-    await redis.put_contact(source, body["name"][0], contact["contact"][0])
-    return HTMLResponse(
-        content=static.DOWNLOAD
-    )
+    await redis.put_contact(source, body["name"][0], body["contact"][0])
+    return HTMLResponse(content=responses.DOWNLOAD)
